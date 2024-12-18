@@ -354,7 +354,9 @@ class GPT(nn.Module):
             next_id = torch.multinomial(probs, num_samples=1)
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, next_id), dim=1)
-
+            # break if next_id is eos token
+            if next_id == self.tokenizer.eos_token:
+                break
         return idx
 
     @torch.no_grad()
@@ -400,7 +402,8 @@ class GPT(nn.Module):
                                   next_id)
             # append sampled index to the running sequence and continue
             idx[:, curr_pos] = next_id
-
+            
+            
         return idx
 
 

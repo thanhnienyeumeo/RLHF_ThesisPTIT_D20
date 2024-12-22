@@ -401,7 +401,8 @@ class GPT(nn.Module):
                                   next_id)
             # append sampled index to the running sequence and continue
             idx[:, curr_pos] = next_id
-
+            
+            
         return idx
 
 

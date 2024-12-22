@@ -6,7 +6,7 @@ import torch.multiprocessing as mp
 from trainers import RewardModelTrainer, FSDPRewardModelTrainer, AcceleratorRewardModelTrainer
 from configs import get_configs
 from gpt import GPTRewardModel
-from dataset import DahoasRMStaticDataset
+from dataset import StepDPODataset,DahoasRMStaticDataset, AnthropicHHRLHFDataset
 
 
 def setup(rank, world_size):
@@ -73,24 +73,44 @@ def train_accelerate():
     trainer.fit()
 
 
-def train(pretrain, batch_size, exp_name):
+def train(pretrain, batch_size, exp_name, epoch, dataset):
     device = 'cuda'
-    cfg = get_configs("gpt2-medium/lora")
+    cfg = get_configs("gpt2-medium/dropout")
     cfg.batch_size = batch_size
     cfg.pretrain = pretrain
-    cfg.total_epochs = 3
+    cfg.total_epochs = epoch
     cfg.exp_name = exp_name
 
     if pretrain == "huggingface":
         rm = GPTRewardModel.from_pretrained(cfg)
     else:
-        rm = GPTRewardModel.from_backbone_checkpoint(cfg, pretrain)
-
-    train_ds = DahoasRMStaticDataset(block_size=1024,
+        rm = GPTRewardModel.from_checkpoint(cfg, pretrain)
+    if dataset == 'AnthropicHHRLHFDataset':
+      train_ds = AnthropicHHRLHFDataset(block_size=1024,
+                                      split='train',
+                                      max_examples=None,
+                                      tokenizer_name="tiktoken/gpt2")
+      test_ds = AnthropicHHRLHFDataset(block_size=1024,
+                                      split='test',
+                                      max_examples=None,
+                                      tokenizer_name="tiktoken/gpt2")
+    
+    elif dataset == "StepDPO":
+      
+      train_ds = StepDPODataset(block_size=1024,
                                      split='train',
                                      max_examples=None,
                                      tokenizer_name="tiktoken/gpt2")
-    test_ds = DahoasRMStaticDataset(block_size=1024,
+      test_ds = StepDPODataset(block_size=1024,
+                                     split='test',
+                                     max_examples=None,
+                                     tokenizer_name="tiktoken/gpt2")
+    else: 
+      train_ds = DahoasRMStaticDataset(block_size=1024,
+                                     split='train',
+                                     max_examples=None,
+                                     tokenizer_name="tiktoken/gpt2")
+      test_ds = DahoasRMStaticDataset(block_size=1024,
                                     split='test',
                                     max_examples=None,
                                     tokenizer_name="tiktoken/gpt2")
@@ -102,8 +122,10 @@ def train(pretrain, batch_size, exp_name):
 @click.option('--strategy', '-s', default="naive")
 @click.option('--pretrain', '-p', default="huggingface")
 @click.option('--batch-size', '-b', default=1)
-@click.option('--exp-name', '-n', default="default")
-def main(strategy, pretrain, batch_size, exp_name):
+@click.option('--exp-name', '-n', default="math")
+@click.option('--epoch', '-e', default=5)
+@click.option('--dataset', '-d', default='StepDPO')
+def main(strategy, pretrain, batch_size, exp_name, epoch, dataset):
     torch.manual_seed(1234)
 
     if strategy == "fsdp":
@@ -115,7 +137,7 @@ def main(strategy, pretrain, batch_size, exp_name):
     elif strategy == "accelerate":
         train_accelerate()
     elif strategy == "naive":
-        train(pretrain, batch_size, exp_name)
+        train(pretrain, batch_size, exp_name, epoch, dataset)
 
 
 if __name__ == "__main__":

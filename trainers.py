@@ -93,22 +93,28 @@ class PPOTrainer(Trainer):
 
     def __init__(self, cfg: TrainingConfig, actor: GPTActor, critic: GPTCritic,
                  reward_model: GPTRewardModel, sft_model: GPTActor,
-                 train_dataset, debug) -> None:
+                 train_dataset, debug,  mean, std) -> None:
         super().__init__()
         self.cfg = cfg
         self.run_name = f"ppo_{cfg.exp_name}_{datetime.now().strftime('%Y%m%d%H%M')}"
         self.device = "cuda"
-        self.max_new_tokens = 128
+        self.max_new_tokens = 512
 
         self.orig_actor = actor
         self.orig_critic = critic
         self.orig_sft_model = sft_model
         self.orig_reward_model = reward_model
 
-        self.actor = torch.compile(self.orig_actor)
-        self.critic = torch.compile(self.orig_critic)
-        self.sft_model = torch.compile(self.orig_sft_model)
-        self.reward_model = torch.compile(self.orig_reward_model)
+        # self.actor = torch.compile(self.orig_actor)
+        # self.critic = torch.compile(self.orig_critic)
+        # self.sft_model = torch.compile(self.orig_sft_model)
+        # self.reward_model = torch.compile(self.orig_reward_model)
+
+        self.actor = (self.orig_actor)
+        self.critic = (self.orig_critic)
+        self.sft_model = (self.orig_sft_model)
+        self.reward_model = (self.orig_reward_model)
+
         # Separate actor loss from critic loss to save optimizer memory
         self.actor_criterion = PolicyLoss()
         self.critic_criterion = ValueLoss()
@@ -131,7 +137,7 @@ class PPOTrainer(Trainer):
                                     max_queue=50)
         self.total_epochs = cfg.total_epochs
         self.debug = debug
-        self.save_freq = 500
+        self.save_freq = 5397
         self.dtype = torch.float16
         self.tokenizer = TiktokenTokenizer("gpt2")
         self.finetune_method = cfg.finetune_method
@@ -142,7 +148,10 @@ class PPOTrainer(Trainer):
             "train_dataset_len": len(train_dataset),
             "dtype": str(self.dtype),
             **cfg.dict(),
+            
         }
+        self.mean = mean
+        self.std = std
         self.save_hyperparams(hp)
         print("Initialized PPO Trainer")
 
@@ -210,8 +219,11 @@ class PPOTrainer(Trainer):
             completion, attention_mask, num_actions)  # (B, num_actions)
         values = self.critic.forward_critic(completion,
                                             attention_mask, num_actions).view(-1, 1)  # (B, 1)
-        reward = self.reward_model(completion,
-                                   attention_mask)  # (B, 1)
+        reward = (self.reward_model(completion,
+                                   attention_mask) )   # (B, 1)
+        mean = self.mean*torch.ones_like(reward)
+        std = self.std*torch.ones_like(reward)
+        reward = (reward - mean)/std
 
         if self.debug:
             print("actor_log_probs", actor_log_probs.shape)
@@ -315,14 +327,14 @@ class PPOTrainer(Trainer):
 
                 if self.debug:
                     return
-
+            self.save_states(total_steps)
         self.save_states(None, True)
 
 
 class SFTTrainer(Trainer):
 
     def __init__(self, cfg: TrainingConfig, device, model: nn.Module,
-                 train_dataset, test_dataset) -> None:
+                 train_dataset, test_dataset, epoch, cur_optimizer, cur_step) -> None:
         super().__init__()
         self.cfg = cfg
         self.run_name = f"sft_{cfg.exp_name}_{datetime.now().strftime('%Y%m%d%H%M')}"
@@ -330,21 +342,27 @@ class SFTTrainer(Trainer):
         assert self.device == 'cuda'
         self.max_steps = cfg.max_steps
         self.eval_freq = 1
-        self.save_freq = 20000
+        self.save_freq = int(cfg.max_steps // epoch)
         self.train_dataloader = iter(
             DataLoader(train_dataset,
                        batch_size=cfg.batch_size,
-                       num_workers=6,
+                       num_workers=1,
                        pin_memory=True))
-        self.test_dataloader = iter(
-            DataLoader(test_dataset,
-                       batch_size=cfg.batch_size,
-                       num_workers=6,
-                       pin_memory=True))
+        # self.test_dataloader = iter(
+        #     DataLoader(test_dataset,
+        #                batch_size=cfg.batch_size,
+        #                num_workers=1,
+        #                pin_memory=True))
         self.model = model
         self.criterion = CrossEntropyLoss()
-
+        
         self.optimizer = optim.Adam(self.model.parameters(), lr=cfg.lr)
+        if cur_optimizer is not None:
+            self.optimizer.load_state_dict(cur_optimizer, )
+            for state in self.optimizer.state.values():
+                for k, v in state.items():
+                    if isinstance(v, torch.Tensor):
+                        state[k] = v.to(device)
         self.grad_clip = cfg.grad_clip
         self.dtype = torch.float16
 
@@ -354,27 +372,30 @@ class SFTTrainer(Trainer):
             "dtype": str(self.dtype),
             "train_dataset": type(train_dataset).__name__,
             "train_dataset_len": len(train_dataset),
-            "test_dataset": type(test_dataset).__name__,
-            "test_dataset_len": len(test_dataset),
+            # "test_dataset": type(test_dataset).__name__,
+            # "test_dataset_len": len(test_dataset),
             **cfg.dict(),
         }
         self.save_hyperparams(hp)
+        self.cur_state = cur_step
 
     def fit(self):
         if self.finetune_method:
             self.model.freeze_weights(self.finetune_method)
         summary(self.model, input_data=torch.ones(1, 1024).long())
 
-        opt_model = torch.compile(self.model)
+        # opt_model = torch.compile(self.model)
+        opt_model = self.model
         opt_model.to(self.device)
         writer = SummaryWriter(f'./runs/{self.run_name}/logs', max_queue=40)
         scaler = GradScaler(enabled=self.dtype != torch.float32)
-
+        # scaler.to(self.device)
+        # self.optimizer.to(self.device)
         opt_model.train()
         step = 0
 
         t0 = time.time()
-        while step < self.max_steps:
+        while step + self.cur_state < self.max_steps:
             x, y = next(self.train_dataloader)
             x = x.to(self.device)
             y = y.to(self.device)
@@ -386,7 +407,7 @@ class SFTTrainer(Trainer):
             if self.grad_clip != 0.0:
                 torch.nn.utils.clip_grad_norm_(opt_model.parameters(),
                                                self.grad_clip)
-
+            loss = loss.to(self.device)
             scaler.scale(loss).backward()
             scaler.step(self.optimizer)
             scaler.update()
@@ -396,16 +417,16 @@ class SFTTrainer(Trainer):
             iter_time = time.time() - t0
             t0 = time.time()
             print(
-                f"step {step}, batch loss {round(lossf, 3)}, {round(1.0 / iter_time, 2)} iters/s"
+                f"step {step + self.cur_state}, batch loss {round(lossf, 3)}, {round(1.0 / iter_time, 2)} iters/s"
             )
-            writer.add_scalar('Loss/train/step', lossf, step)
+            writer.add_scalar('Loss/train/step', lossf, step+self.cur_state)
 
             if step != 0 and step % self.save_freq == 0:
-                self.save_states(step)
+                self.save_states(step + self.cur_state)
 
             step += 1
 
-        self.save_states(step, True)
+        # self.save_states(step, True)
 
 
 class RewardModelTrainer(Trainer):
@@ -418,7 +439,7 @@ class RewardModelTrainer(Trainer):
         assert self.device == 'cuda'
         self.total_epochs = cfg.total_epochs
         self.eval_freq = 1
-        self.save_freq = 30000
+        self.save_freq = 9000
         self.model = model
         self.train_dataloader = DataLoader(train_dataset,
                                            batch_size=cfg.batch_size,
@@ -450,8 +471,9 @@ class RewardModelTrainer(Trainer):
         if self.finetune_method:
             self.model.freeze_weights(self.finetune_method)
         summary(self.model, input_data=torch.ones(1, 1024).long())
-
-        opt_model = torch.compile(self.model)
+        
+        # opt_model = torch.compile(self.model) complie
+        opt_model = self.model
         opt_model.to(self.device)
         writer = SummaryWriter(f'./runs/{self.run_name}/logs', max_queue=40)
         scaler = GradScaler(enabled=self.dtype != torch.float32)
@@ -489,8 +511,8 @@ class RewardModelTrainer(Trainer):
                 writer.add_scalar('Loss/train/step', lossf, total_steps)
                 pbar.set_description(f"batch loss {round(lossf, 3)}")
 
-                if total_steps != 0 and total_steps % self.save_freq == 0:
-                    self.save_states(total_steps)
+                # if total_steps != 0 and total_steps % self.save_freq == 0:
+                #     self.save_states(total_steps)
 
             if epoch % self.eval_freq == 0:
                 opt_model.eval()
@@ -526,8 +548,8 @@ class RewardModelTrainer(Trainer):
 
                 writer.add_scalar('Loss/test/epoch', epoch_loss, epoch)
                 writer.add_scalar('Acc/test/epoch', acc, epoch)
-                print(f'Epoch: {epoch + 1}, Test Loss: {lossf}, Acc: {acc}')
-
+                print(f'Epoch: {epoch + 1}, Test Loss: {epoch_loss}, Acc: {acc}')
+                self.save_states(total_steps)
         self.save_states(total_steps, True)
 
 

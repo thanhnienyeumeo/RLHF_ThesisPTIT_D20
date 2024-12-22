@@ -20,8 +20,8 @@ class TiktokenTokenizer():
                  truncation=False,
                  return_tensors=None):
         ids = self.encode(text)
-        if truncation:
-            ids = ids[:max_length]
+        if truncation and len(ids) > max_length:
+            ids = ids[-max_length:]
         mask = [1] * len(ids)
         if padding == "max_length":
             mask += [0] * (max_length - len(ids))

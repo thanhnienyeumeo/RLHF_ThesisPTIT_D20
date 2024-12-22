@@ -354,7 +354,8 @@ class GPT(nn.Module):
             next_id = torch.multinomial(probs, num_samples=1)
             # append sampled index to the running sequence and continue
             idx = torch.cat((idx, next_id), dim=1)
-
+            if next_id == 50256:
+                break
         return idx
 
     @torch.no_grad()

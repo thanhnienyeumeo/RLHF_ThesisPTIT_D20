@@ -238,6 +238,8 @@ class AnthropicHHRLHFDataset(Dataset):
                  tokenizer_name='tiktoken/gpt2') -> None:
         super().__init__()
         dataset = load_dataset("Anthropic/hh-rlhf", split=split)
+        # if split == 'train':
+
         self.pairs = []
         self.masks = []
 
@@ -250,23 +252,31 @@ class AnthropicHHRLHFDataset(Dataset):
             tokenizer = TiktokenTokenizer('gpt2')
 
         cnt = 0
+        num_skip = 0
         for data in dataset:
             positive = tokenizer(data["chosen"],
                                  max_length=block_size,
                                  padding="max_length",
-                                 truncation=True,
+                                 truncation=False,
                                  return_tensors="pt")
             positive_indices = positive["input_ids"]
+            if len(positive_indices) > block_size:
+                print("longer than block size")
+                num_skip += 1
+                continue
             positive_mask = positive["attention_mask"]
 
             negative = tokenizer(data["rejected"],
                                  max_length=block_size,
                                  padding="max_length",
-                                 truncation=True,
+                                 truncation=False,
                                  return_tensors="pt")
             negative_indices = negative["input_ids"]
             negative_mask = negative["attention_mask"]
-
+            if len(negative_indices) > block_size:
+                print("longer than block size")
+                num_skip += 1
+                continue
             self.pairs.append(
                 torch.stack((positive_indices, negative_indices), dim=0))
 
@@ -275,6 +285,7 @@ class AnthropicHHRLHFDataset(Dataset):
             cnt += 1
             if max_examples and cnt >= max_examples:
                 break
+        print(f'skip {num_skip} samples' )
 
     @classmethod
     def save(cls, split, fp):
@@ -426,3 +437,332 @@ class ShareGPTPromptsDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.prompts[idx][0], self.prompts[idx][1], self.prompts[idx][2]  # (1, T), (1, T)
+    
+class SafeRLHFPromptsDataset(Dataset):
+
+    def __init__(self,
+                 block_size,
+                    split = 'train',
+                 max_examples=None,
+                 tokenizer_name='tiktoken/gpt2') -> None:
+        super().__init__()
+        
+
+        dataset = load_dataset("PKU-Alignment/PKU-SafeRLHF", "default", split = split)
+        dataset.shuffle()
+        self.prompts = []
+
+        if tokenizer_name == "huggingface/gpt2":
+            tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+            tokenizer.pad_token = tokenizer.eos_token
+        elif tokenizer_name == "huggingface/gpt2fast":
+            tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
+        elif tokenizer_name == "tiktoken/gpt2":
+            tokenizer = TiktokenTokenizer('gpt2')
+
+        cnt = 0
+        print(f"Loading SafeRLHFPromptsDataset")
+        self.raw_prompts = []
+        for data in dataset:
+            # print(data)
+            cnt += 1
+            prompt = 'Human: ' + data['prompt'] +'\n\nAssistant: '
+            # print(prompt)
+            tokens = tokenizer(prompt,
+                               max_length=block_size,
+                               padding="max_length",
+                               truncation=True,
+                               return_tensors="pt")
+
+            self.prompts.append(
+                [tokens['input_ids'], tokens['attention_mask'], torch.sum(tokens['attention_mask'])])
+            self.raw_prompts.append(prompt)
+            if max_examples and cnt >= max_examples:
+                break
+
+
+    def __len__(self):
+        return len(self.prompts)
+
+    def __getitem__(self, idx):
+        return self.prompts[idx][0], self.prompts[idx][1], self.prompts[idx][2]  # (1, T), (1, T)
+    
+
+class MathDataset(Dataset):
+
+    """
+    https://huggingface.co/datasets/Dahoas/sft-static
+    """
+
+    def __init__(self,
+                 block_size,
+                 split='train',
+                 max_examples=None,
+                 tokenizer_name='tiktoken/gpt2') -> None:
+        super().__init__()
+        dataset1 = load_dataset(
+            "openai/gsm8k",
+            'main',
+            split=split)
+        dataset2 = load_dataset("lighteval/MATH",  'all', split = split, trust_remote_code=True)
+        self.tokens = []
+        self.block_size = block_size
+
+        if tokenizer_name == "huggingface/gpt2":
+            tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+            tokenizer.pad_token = tokenizer.eos_token
+        elif tokenizer_name == "huggingface/gpt2fast":
+            tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
+        elif tokenizer_name == "tiktoken/gpt2":
+            tokenizer = TiktokenTokenizer('gpt2')
+
+        cnt = 0
+        print(f"Loading MathDataset {split} split")
+        for data in dataset1:
+            response_text = 'Human: '
+            cnt += 1
+            prompt = data['question']
+
+            response_text += prompt + "\n\n" + 'Assistant: ' + data['answer'] + "<|endoftext|>"
+            response = tokenizer(response_text)
+
+            self.tokens += response['input_ids']
+            if max_examples and cnt >= max_examples:
+                break
+        for data in dataset2:
+            response_text = 'Human: '
+            cnt += 1
+            prompt = data['problem']
+
+            response_text += prompt + "\n\n" + 'Assistant: ' + data['solution'] + "<|endoftext|>"
+            response = tokenizer(response_text)
+
+            self.tokens += response['input_ids']
+            if max_examples and cnt >= max_examples:
+                break
+        self.tokens = torch.tensor(self.tokens, dtype=torch.long)
+        try:
+            print(len(self.tokens))
+        except:
+            print('error')
+            pass
+
+    def __getitem__(self, idx):
+        start = random.randint(0, len(self.tokens) - self.block_size - 2)
+        x = self.tokens[start:start + self.block_size]
+        y = self.tokens[start + 1:start + self.block_size + 1]
+        yield x, y
+    def __iter__(self):
+        start = random.randint(0, len(self.tokens) - self.block_size - 2)
+        x = self.tokens[start:start + self.block_size]
+        y = self.tokens[start + 1:start + self.block_size + 1]
+        yield x, y
+    def __len__(self):
+        import sys
+        return sys.maxsize
+    
+class StepDPODataset(Dataset):
+    """
+    https://huggingface.co/datasets/step-dpo
+    """
+
+    def __init__(self,
+                 block_size,
+                 split='train',
+                 max_examples=None,
+                 tokenizer_name='tiktoken/gpt2') -> None:
+        super().__init__()
+        dataset = load_dataset("Colder203/RLHF_Math_Step_GPT2", split='train')
+        split_rate = 85/100
+        if split == 'train':
+            dataset = dataset.select(range(int(len(dataset)*split_rate)))
+        else:
+            dataset = dataset.select(range(int(len(dataset)*split_rate), len(dataset)))
+        self.pairs = []
+        self.masks = []
+
+        if tokenizer_name == "huggingface/gpt2":
+            tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+            tokenizer.pad_token = tokenizer.eos_token
+        elif tokenizer_name == "huggingface/gpt2fast":
+            tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
+        elif tokenizer_name == "tiktoken/gpt2":
+            tokenizer = TiktokenTokenizer('gpt2')
+
+        cnt = 0
+        num_skip = 0
+        for data in dataset:
+            d1 =data["full_chosen"] + "<|endoftext|>"
+            d2 = data["full_rejected"] + "<|endoftext|>"
+            if len(d1) > block_size:
+                d1 = d1[-block_size:]
+            if len(d2) > block_size:
+                d2 = d2[-block_size:]
+            if d1 == d2:
+                print('skip....')
+                continue
+            positive = tokenizer(data["full_chosen"] + "<|endoftext|>",
+                                 max_length=block_size,
+                                 padding="max_length",
+                                 truncation=True,
+                                 return_tensors="pt")
+            positive_indices = positive["input_ids"]
+            positive_mask = positive["attention_mask"]
+            # if len(positive_indices) > block_size:
+            #     print(f"{len(positive_indices)} longer than block size")
+            #     num_skip += 1
+            negative = tokenizer(data["rejected"] ,
+                                 max_length=block_size,
+                                 padding="max_length",
+                                 truncation=True,
+                                 return_tensors="pt")
+            negative_indices = negative["input_ids"]
+            negative_mask = negative["attention_mask"]
+
+            self.pairs.append(
+                torch.stack((positive_indices, negative_indices), dim=0))
+
+            self.masks.append(
+                torch.stack((positive_mask, negative_mask), dim=0))
+            cnt +=1
+            negative = tokenizer(data["full_rejected"] + "<|endoftext|>",
+                                 max_length=block_size,
+                                 padding="max_length",
+                                 truncation=True,
+                                 return_tensors="pt")
+            negative_indices = negative["input_ids"]
+            negative_mask = negative["attention_mask"]
+
+            self.pairs.append(
+                torch.stack((positive_indices, negative_indices), dim=0))
+
+            self.masks.append(
+                torch.stack((positive_mask, negative_mask), dim=0))
+            cnt += 1
+            
+            if max_examples and cnt >= max_examples:
+                break
+
+    @classmethod
+    def save(cls, split, fp):
+        dataset = load_dataset("step-dpo", split=split)
+        examples = []
+        for data in tqdm(dataset):
+            examples.append(data["chosen"])
+        import json
+        json.dump(examples, fp)
+
+    def __len__(self):
+        return len(self.pairs)
+
+    def __getitem__(self, idx):
+        return self.pairs[idx], self.masks[idx]  # (2, T), (2, T)
+    
+class StepDPOPromptsDataset(Dataset):
+
+    def __init__(self,
+                 block_size,
+                 max_examples=None,
+                 tokenizer_name='tiktoken/gpt2') -> None:
+        super().__init__()
+        path = 'Colder203/RLHF_PPO_Math_Step'
+        dataset = load_dataset(path, split='train')
+        self.prompts = []
+
+        if tokenizer_name == "huggingface/gpt2":
+            tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+            tokenizer.pad_token = tokenizer.eos_token
+        elif tokenizer_name == "huggingface/gpt2fast":
+            tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
+        elif tokenizer_name == "tiktoken/gpt2":
+            tokenizer = TiktokenTokenizer('gpt2')
+
+        cnt = 0
+        print(f"Loading StepDPOPromptsDataset")
+        for data in dataset['prompt']:
+            cnt += 1
+            # prompt = data['prompt']
+            prompt = data
+            tokens = tokenizer(prompt,
+                               max_length=block_size,
+                               padding="max_length",
+                               truncation=True,
+                               return_tensors="pt")
+
+            self.prompts.append(
+                [tokens['input_ids'], tokens['attention_mask'], torch.sum(tokens['attention_mask'])])
+
+            if max_examples and cnt >= max_examples:
+                break
+    def __len__(self):
+        return len(self.prompts)
+
+    def __getitem__(self, idx):
+        return self.prompts[idx][0], self.prompts[idx][1], self.prompts[idx][2]  # (1, T), (1, T)
+
+
+class MetaMathDataset(Dataset):
+
+    """
+    https://huggingface.co/datasets/Dahoas/sft-static
+    """
+
+    def __init__(self,
+                 block_size,
+                 split='train',
+                 max_examples=None,
+                 tokenizer_name='tiktoken/gpt2') -> None:
+        super().__init__()
+        dataset = load_dataset(
+            "meta-math/MetaMathQA",
+            
+            split='train')
+        split_rate  = 0.95
+        if split == 'train':
+            dataset = dataset.select(range(int(len(dataset)*split_rate)))
+        else:
+            dataset = dataset.select(range(int(len(dataset)*split_rate), len(dataset)))
+        self.tokens = []
+        self.block_size = block_size
+
+        if tokenizer_name == "huggingface/gpt2":
+            tokenizer = GPT2Tokenizer.from_pretrained('gpt2')
+            tokenizer.pad_token = tokenizer.eos_token
+        elif tokenizer_name == "huggingface/gpt2fast":
+            tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
+        elif tokenizer_name == "tiktoken/gpt2":
+            tokenizer = TiktokenTokenizer('gpt2')
+
+        cnt = 0
+        print(f"Loading MetaMathDataset {split} split")
+        for data in dataset:
+            response_text = 'Human: '
+            cnt += 1
+            prompt = data['query']
+
+            response_text += prompt + "\n\n" + 'Assistant: ' + data['response'] + "<|endoftext|>"
+            response = tokenizer(response_text)
+
+            self.tokens += response['input_ids']
+            if max_examples and cnt >= max_examples:
+                break
+        self.tokens = torch.tensor(self.tokens, dtype=torch.long)
+        try:
+            print(len(self.tokens))
+        except:
+            print('error')
+            pass
+
+    def __getitem__(self, idx):
+        start = random.randint(0, len(self.tokens) - self.block_size - 2)
+        x = self.tokens[start:start + self.block_size]
+        y = self.tokens[start + 1:start + self.block_size + 1]
+        return x, y
+    def __iter__(self):
+        start = random.randint(0, len(self.tokens) - self.block_size - 2)
+        x = self.tokens[start:start + self.block_size]
+        y = self.tokens[start + 1:start + self.block_size + 1]
+        yield x, y
+    def __len__(self):
+        import sys
+        return sys.maxsize

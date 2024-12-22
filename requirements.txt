@@ -1,0 +1,11 @@
+accelerate==1.2.1
+click==8.1.3
+datasets==3.2.0
+langchain==0.3.13
+loralib==0.1.1
+sentencepiece==0.1.97
+tiktoken==0.2.0
+torch==2.0.0+cu118
+torchinfo==1.7.2
+tqdm==4.67.1
+transformers==4.47.1

@@ -4,7 +4,8 @@ from trainers import PPOTrainer
 from configs import get_configs
 from gpt import GPTActor, GPTRewardModel, GPTCritic
 from dataset import StepDPOPromptsDataset, DahoasSFTStaticPromptsDataset, SafeRLHFPromptsDataset
-
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 def train(batch_size, exp_name, actor_weights, critic_weights, debug):
     cfg_critic = get_configs("gpt2-medium")

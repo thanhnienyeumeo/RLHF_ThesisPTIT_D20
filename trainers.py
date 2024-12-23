@@ -137,7 +137,7 @@ class PPOTrainer(Trainer):
                                     max_queue=50)
         self.total_epochs = cfg.total_epochs
         self.debug = debug
-        self.save_freq = 5397
+        self.save_freq = 2653
         self.dtype = torch.float16
         self.tokenizer = TiktokenTokenizer("gpt2")
         self.finetune_method = cfg.finetune_method
@@ -219,11 +219,13 @@ class PPOTrainer(Trainer):
             completion, attention_mask, num_actions)  # (B, num_actions)
         values = self.critic.forward_critic(completion,
                                             attention_mask, num_actions).view(-1, 1)  # (B, 1)
+        mean = self.mean*torch.ones_like(values)
+        values = (values - mean)
         reward = (self.reward_model(completion,
                                    attention_mask) )   # (B, 1)
         mean = self.mean*torch.ones_like(reward)
-        std = self.std*torch.ones_like(reward)
-        reward = (reward - mean)/std
+        # std = self.std*torch.ones_like(reward)
+        reward = (reward - mean)
 
         if self.debug:
             print("actor_log_probs", actor_log_probs.shape)
@@ -233,8 +235,8 @@ class PPOTrainer(Trainer):
 
         kl_penalized_reward, estimated_kl = self.kl_penalized_reward(
             reward, actor_log_probs, sft_log_probs)
-        advantage = kl_penalized_reward - values
-
+        # advantage = kl_penalized_reward - values
+        advantage = reward - values
         if self.debug:
             print("kl_penalized_reward", kl_penalized_reward)
             print("advantage", advantage.shape)

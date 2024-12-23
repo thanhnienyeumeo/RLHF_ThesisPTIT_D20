@@ -8,7 +8,8 @@ from configs import get_configs
 from gpt import GPTRewardModel
 from dataset import StepDPODataset,DahoasRMStaticDataset, AnthropicHHRLHFDataset
 
-
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'

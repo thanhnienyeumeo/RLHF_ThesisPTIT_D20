@@ -4,7 +4,8 @@ from trainers import SFTTrainer
 from gpt import GPT
 from dataset import EYLSFTStaticDataset, MathDataset, MetaMathDataset
 from configs import get_configs
-
+import warnings
+warnings.filterwarnings("ignore", category=UserWarning)
 
 def train(pretrain, batch_size, exp_name, epoch):
     device = 'cuda'

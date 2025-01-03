@@ -37,7 +37,7 @@ def generate_gpt2(model, prompt, device, samples=2):
     
 
 
-def main(model_name, prompt, device, model = None):
+def reply(model_name, prompt, device, model = None):
     prompt = "Human: " + prompt + "\n\nAssistant:"
     
     cfg = get_configs("gpt2-medium")

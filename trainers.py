@@ -38,9 +38,44 @@ from torch.distributed.fsdp.wrap import (
 from torch.nn.utils.rnn import pack_sequence, pad_packed_sequence
 from tokenizer import TiktokenTokenizer
 
-
+from typing import Tuple, Callable
 # import bitsandbytes as bnb
+class RunningMoments:
+    def __init__(self):
+        """
+        Calculates the running mean and standard deviation of a data stream. Modified version of
+        https://github.com/DLR-RM/stable-baselines3/blob/a6f5049a99a4c21a6f0bcce458ca3306cef310e0/stable_baselines3/common/running_mean_std.py
+        """
+        self.mean = 0
+        self.std = 1
+        self.var = 1
+        self.count = 1e-24
+        
 
+    @torch.no_grad()
+    def update(self, xs: torch.Tensor) -> Tuple[float, float]:
+        """
+        Updates running moments from batch's moments computed across ranks
+        """
+        if True:
+            xs_count = xs.numel()
+            xs_var, xs_mean = torch.var_mean(xs, unbiased=False)
+        xs_mean, xs_var = xs_mean.float(), xs_var.float()
+
+        delta = xs_mean - self.mean
+        tot_count = self.count + xs_count
+
+        new_sum = xs_var * xs_count
+        # correct old_sum deviation accounting for the new mean
+        old_sum = self.var * self.count + delta**2 * self.count * xs_count / tot_count
+        tot_sum = old_sum + new_sum
+
+        self.mean += delta * xs_count / tot_count
+        self.var = tot_sum / tot_count
+        self.std = (self.var * tot_count / (tot_count - 1)).float().sqrt()
+        self.count = tot_count
+
+        return xs_mean.item(), (xs_var * xs_count / (xs_count - 1)).float().sqrt().item()
 
 class Trainer:
 
@@ -82,6 +117,7 @@ class Experience:
     actor_log_probs: torch.Tensor
     attention_mask: torch.Tensor
     kl_penalized_reward: torch.Tensor
+    rewards_mean: torch.Tensor
     advantage: torch.Tensor
     num_actions: int
     estimated_kl: torch.Tensor
@@ -104,7 +140,7 @@ class PPOTrainer(Trainer):
         self.orig_critic = critic
         self.orig_sft_model = sft_model
         self.orig_reward_model = reward_model
-
+        self.running = RunningMoments()
         # self.actor = torch.compile(self.orig_actor)
         # self.critic = torch.compile(self.orig_critic)
         # self.sft_model = torch.compile(self.orig_sft_model)
@@ -219,19 +255,20 @@ class PPOTrainer(Trainer):
             completion, attention_mask, num_actions)  # (B, num_actions)
         values = self.critic.forward_critic(completion,
                                             attention_mask, num_actions).view(-1, 1)  # (B, 1)
-        mean = self.mean*torch.ones_like(values)
-        values = (values - mean)
+        
+        # values = (values - mean)
         reward = (self.reward_model(completion,
                                    attention_mask) )   # (B, 1)
-        mean = self.mean*torch.ones_like(reward)
-        # std = self.std*torch.ones_like(reward)
-        reward = (reward - mean)
+        rewards_mean, rewards_std = self.running.update(reward)
+        reward = (reward - self.running.mean) / self.running.std
+        
 
         if self.debug:
             print("actor_log_probs", actor_log_probs.shape)
             print("sft_log_probs", sft_log_probs.shape)
             print("values", values.shape)
             print("reward", reward.shape)
+            print("mean reward", rewards_mean.shape)
 
         kl_penalized_reward, estimated_kl = self.kl_penalized_reward(
             reward, actor_log_probs, sft_log_probs)
@@ -242,7 +279,7 @@ class PPOTrainer(Trainer):
             print("advantage", advantage.shape)
 
         return Experience(
-            completion, actor_log_probs, attention_mask, kl_penalized_reward, advantage, num_actions, estimated_kl,
+            completion, actor_log_probs, attention_mask, kl_penalized_reward, rewards_mean, advantage, num_actions, estimated_kl, #change this
             values, action_mask)
 
     def fit(self):
@@ -310,7 +347,9 @@ class PPOTrainer(Trainer):
                 self.writer.add_scalar('KL', experience.estimated_kl.mean(), total_steps)
                 self.writer.add_scalar('mean_advantage', experience.advantage.mean(),
                                        total_steps)
-                self.writer.add_scalar('mean_reward', experience.kl_penalized_reward.mean(),
+                self.writer.add_scalar('mean_reward', experience.rewards_mean,
+                                       total_steps)
+                self.writer.add_scalar('reward', experience.kl_penalized_reward.mean(),
                                        total_steps)
                 self.writer.add_scalar('mean_value', new_values.mean(),
                                        total_steps)

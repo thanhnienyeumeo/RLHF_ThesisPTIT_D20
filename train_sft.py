@@ -9,7 +9,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 
 def train(pretrain, batch_size, exp_name, epoch):
     device = 'cuda'
-    cfg = get_configs("gpt2-large/dropout")
+    cfg = get_configs("gpt2-medium")
     cfg.max_steps = 100000 // batch_size
     cfg.batch_size = batch_size
     cfg.pretrain = pretrain

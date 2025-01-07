@@ -47,7 +47,7 @@ def train(batch_size, exp_name, actor_weights, critic_weights, debug):
     #                                         tokenizer_name="tiktoken/gpt2")
     dataset = SafeRLHFPromptsDataset(block_size=1024,
     # dataset = StepDPOPromptsDataset(block_size=1024,
-                                            max_examples=None,
+                                            max_examples=2000,
                                             tokenizer_name="tiktoken/gpt2")
     # reward_model.freeze_weights('lora')
     # critic.freeze_weights('lora')

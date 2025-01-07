@@ -22,7 +22,7 @@ def generate_gpt2(model, prompt, device, samples=2):
     model.eval()
     model.to(device)
     max_new_tokens = 512
-    temperature = 1.0
+    temperature = 0.15
     top_k = 50
     x, decode, enc = prepare_gpt2_input(prompt, device)
 

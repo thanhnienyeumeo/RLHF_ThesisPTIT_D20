@@ -188,6 +188,7 @@ class PPOTrainer(Trainer):
         }
         self.mean = mean
         self.std = std
+        self.buffer = []
         self.save_hyperparams(hp)
         print("Initialized PPO Trainer")
 
@@ -303,7 +304,7 @@ class PPOTrainer(Trainer):
                                     enabled=self.dtype != torch.float32):
                     experience = self.make_experience(
                         prompt, input_masks, input_lengths)
-
+                    self.buffer.append(experience)
                     self.actor.train()
                     curr_actor_log_probs = self.actor.forward_actor(
                         experience.completion, experience.attention_mask, experience.num_actions)
